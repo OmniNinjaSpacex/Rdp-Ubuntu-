@@ -1,0 +1,119 @@
+name: Linux Mint Cinnamon - Dev/Test (Tailscale RDP)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-mint-cinnamon-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      RDP_USER: cloudpc
+      TS_HOSTNAME: gh-mint-${{ github.run_id }}
+
+    steps:
+      - name: Record job start time
+        shell: bash
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate required secrets
+        shell: bash
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "$TAILSCALE_AUTHKEY" ]] || {
+            echo "Missing secret: TAILSCALE_AUTHKEY"
+            exit 1
+          }
+
+          [[ -n "$RDP_PASSWORD" ]] || {
+            echo "Missing secret: RDP_PASSWORD"
+            exit 1
+          }
+
+          (( ${#RDP_PASSWORD} >= 12 )) || {
+            echo "RDP_PASSWORD must have at least 12 characters"
+            exit 1
+          }
+
+      - name: Provision Cinnamon, XRDP, apps, macOS cursor and Tailscale
+        shell: bash
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: bash scripts/setup-linux-mint-cinnamon.sh
+
+      - name: Show connection information
+        id: connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /tmp/mint-rdp-info
+
+          sudo systemctl is-active --quiet xrdp
+          sudo systemctl is-active --quiet xrdp-sesman
+          sudo systemctl is-active --quiet tailscaled
+          sudo ss -ltn | grep ':3389'
+
+          echo "tailscale_ip=$TAILSCALE_IP" >> "$GITHUB_OUTPUT"
+          echo "rdp_user=$RDP_USER" >> "$GITHUB_OUTPUT"
+
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "RDP username: $RDP_USER"
+          echo "Desktop: $DESKTOP"
+          echo "Cursor: $CURSOR_THEME"
+
+          {
+            echo "## 🟢 Linux Mint-style Cinnamon pronto para dev/test"
+            echo
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| PC / IP no Windows App | \`$TAILSCALE_IP\` |"
+            echo "| Usuário | \`$RDP_USER\` |"
+            echo "| Senha | valor do secret \`RDP_PASSWORD\` |"
+            echo "| Sessão | Xorg |"
+            echo "| Desktop | Cinnamon |"
+            echo "| Cursor | \`$CURSOR_THEME\` (estilo macOS) |"
+            echo "| Apps | Navegador, Nemo, Terminal, GNOME Software, Flatpak/Flathub |"
+            echo "| Transporte | Tailscale; TCP/3389 filtrado para tailscale0 |"
+            echo
+            echo "No Android: Tailscale conectado à mesma tailnet → Windows App → + → Conexão do PC → informe o IP acima → entre como \`$RDP_USER\` usando sua \`RDP_PASSWORD\`."
+            echo
+            echo "> Este é Ubuntu 24.04 + Cinnamon configurado para experiência estilo Linux Mint. Não é a ISO oficial do Linux Mint. A VM é temporária e os arquivos locais desaparecem quando o job termina."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep desktop available
+        shell: bash
+        run: |
+          set -euo pipefail
+          END_EPOCH=$(( JOB_START_EPOCH + 355 * 60 ))
+          echo "Desktop disponível até aproximadamente $(date -d "@$END_EPOCH" -u '+%Y-%m-%d %H:%M:%S UTC')."
+
+          while (( $(date +%s) < END_EPOCH )); do
+            sudo systemctl is-active --quiet xrdp || sudo systemctl restart xrdp
+            sudo systemctl is-active --quiet xrdp-sesman || sudo systemctl restart xrdp-sesman
+            sudo systemctl is-active --quiet tailscaled || sudo systemctl restart tailscaled
+            sleep 60
+          done
+
+      - name: Disconnect ephemeral Tailscale node
+        if: always()
+        shell: bash
+        run: |
+          if command -v tailscale >/dev/null 2>&1; then
+            sudo tailscale logout || true
+          fi
