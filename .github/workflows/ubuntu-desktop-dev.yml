@@ -108,4 +108,7 @@ jobs:
       - name: Disconnect ephemeral Tailscale node
         if: always()
         shell: bash
-        run: sudo tailscale logout || true
+        run: |
+          if command -v tailscale >/dev/null 2>&1; then
+            sudo tailscale logout || true
+          fi
