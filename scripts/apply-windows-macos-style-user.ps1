@@ -16,7 +16,6 @@ function Write-StyleLog {
 Write-StyleLog "Interactive personalization started for $env:USERNAME / session $env:SESSIONNAME"
 Start-Sleep -Seconds 3
 
-# Keep Windows responsive but restore the visual motion the previous version disabled.
 $Advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 New-Item -Path $Advanced -Force | Out-Null
 Set-ItemProperty -Path $Advanced -Name TaskbarAl -Type DWord -Value 1
@@ -73,13 +72,13 @@ function Apply-Wallpaper {
     }
 }
 
-# Apple Cursor package contains Windows cursor states such as Pointer, Link, Text,
-# Work/Busy (animated), Help, resize cursors, Move, Person and Pin.
+# Load every .cur/.ani from the real Windows package.
 $CursorFiles = @()
 if (Test-Path $CursorRoot) {
     $CursorFiles = Get-ChildItem -Path $CursorRoot -Recurse -File |
         Where-Object { $_.Extension -in @('.cur', '.ani') }
 }
+Write-StyleLog "Apple Cursor package files found: $($CursorFiles.Count)"
 
 function Find-AppleCursor {
     param([string[]]$Candidates)
@@ -97,6 +96,7 @@ function Find-AppleCursor {
     return $null
 }
 
+# Complete Windows system cursor map. The Apple package's Work/Busy states are animated .ani files.
 $CursorMap = [ordered]@{
     Arrow       = @('Pointer','left_ptr')
     Help        = @('Help','question_arrow')
@@ -118,43 +118,55 @@ $CursorMap = [ordered]@{
 }
 
 $CursorKey = 'HKCU:\Control Panel\Cursors'
+$SchemesKey = 'HKCU:\Control Panel\Cursors\Schemes'
 New-Item -Path $CursorKey -Force | Out-Null
-Set-Item -Path $CursorKey -Value 'macOS CloudPC'
+New-Item -Path $SchemesKey -Force | Out-Null
 Set-ItemProperty -Path $CursorKey -Name CursorBaseSize -Type DWord -Value 32
 
+$Resolved = [ordered]@{}
 $Applied = 0
 foreach ($entry in $CursorMap.GetEnumerator()) {
     $file = Find-AppleCursor -Candidates $entry.Value
     if ($file) {
         Set-ItemProperty -Path $CursorKey -Name $entry.Key -Value $file
+        $Resolved[$entry.Key] = $file
         Write-StyleLog "Cursor $($entry.Key) -> $file"
         $Applied++
     } else {
-        Write-StyleLog "Cursor state not found: $($entry.Key) candidates=$($entry.Value -join ',')"
+        $Resolved[$entry.Key] = ''
+        Write-StyleLog "Cursor state missing: $($entry.Key); candidates=$($entry.Value -join ',')"
     }
 }
 
+# Register a real selectable Windows cursor scheme in the exact system slot order.
+$SchemeOrder = @(
+    'Arrow','Help','AppStarting','Wait','Crosshair','IBeam','NWPen','No',
+    'SizeNS','SizeWE','SizeNWSE','SizeNESW','SizeAll','UpArrow','Hand','Pin','Person'
+)
+$SchemeValues = foreach ($name in $SchemeOrder) { [string]$Resolved[$name] }
+$SchemeString = $SchemeValues -join ','
+New-ItemProperty -Path $SchemesKey -Name 'macOS Complete' -Value $SchemeString -PropertyType String -Force | Out-Null
+Set-Item -Path $CursorKey -Value 'macOS Complete'
+
 if ($Applied -gt 0) {
     [MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
-    Write-StyleLog "Apple cursor scheme applied directly: $Applied states"
+    Write-StyleLog "macOS Complete cursor scheme applied: $Applied/$($CursorMap.Count) Windows states"
 } else {
     Write-StyleLog 'No Apple cursor files were found.'
 }
 
 Apply-Wallpaper
 
-# Restart Explorer once so the centered/clean taskbar settings are applied in this RDP desktop.
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Start-Process -FilePath 'explorer.exe'
 Start-Sleep -Seconds 3
 
-# Re-assert wallpaper/cursors after Explorer has rebuilt the desktop.
+# Explorer sometimes reloads defaults in a new RDP shell, so force both again.
 Apply-Wallpaper
 [MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
 
-# Start Seelen UI in the same interactive RDP session. Its defaults provide a top toolbar
-# and a bottom MinContent dock with hover zoom (40 -> 70 px), which is closer to macOS.
+# Start Seelen UI in this same RDP desktop.
 $CandidateRoots = @(
     'C:\Program Files\Seelen UI',
     'C:\Program Files\Seelen',
