@@ -5,6 +5,7 @@ if ($env:USERNAME -ine 'cloudpc') { exit 0 }
 $MacRoot = 'C:\MacStyle'
 $CursorRoot = Join-Path $MacRoot 'AppleCursor'
 $Wallpaper = Join-Path $MacRoot 'mac-style-wallpaper.bmp'
+$ShellScript = Join-Path $MacRoot 'MacBook-Lite-Shell.ps1'
 $LogFile = Join-Path $MacRoot 'user-style.log'
 
 function Write-StyleLog {
@@ -13,9 +14,11 @@ function Write-StyleLog {
     Add-Content -Path $LogFile -Value "[$stamp] $Message"
 }
 
-Write-StyleLog "Interactive personalization started for $env:USERNAME / session $env:SESSIONNAME"
+Write-StyleLog "Stable MacBook personalization started for $env:USERNAME / session $env:SESSIONNAME"
 Start-Sleep -Seconds 3
 
+# Keep Windows itself light and predictable. The Mac-like look is provided by the
+# lightweight overlay instead of replacing Explorer or using a third-party shell.
 $Advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 New-Item -Path $Advanced -Force | Out-Null
 Set-ItemProperty -Path $Advanced -Name TaskbarAl -Type DWord -Value 1
@@ -30,15 +33,13 @@ $Personalize = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personali
 New-Item -Path $Personalize -Force | Out-Null
 Set-ItemProperty -Path $Personalize -Name AppsUseLightTheme -Type DWord -Value 1
 Set-ItemProperty -Path $Personalize -Name SystemUsesLightTheme -Type DWord -Value 1
-Set-ItemProperty -Path $Personalize -Name EnableTransparency -Type DWord -Value 1
-
-$VisualEffects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
-New-Item -Path $VisualEffects -Force | Out-Null
-Set-ItemProperty -Path $VisualEffects -Name VisualFXSetting -Type DWord -Value 1
+# Disable native Windows transparency to reduce RDP rendering glitches. The custom
+# MacBook bars use their own simple alpha layer instead.
+Set-ItemProperty -Path $Personalize -Name EnableTransparency -Type DWord -Value 0
 
 $Desktop = 'HKCU:\Control Panel\Desktop'
 New-Item -Path $Desktop -Force | Out-Null
-Set-ItemProperty -Path $Desktop -Name MenuShowDelay -Value '120'
+Set-ItemProperty -Path $Desktop -Name MenuShowDelay -Value '100'
 Set-ItemProperty -Path $Desktop -Name WallpaperStyle -Value '10'
 Set-ItemProperty -Path $Desktop -Name TileWallpaper -Value '0'
 
@@ -72,7 +73,6 @@ function Apply-Wallpaper {
     }
 }
 
-# Load every .cur/.ani from the real Windows package.
 $CursorFiles = @()
 if (Test-Path $CursorRoot) {
     $CursorFiles = Get-ChildItem -Path $CursorRoot -Recurse -File |
@@ -96,7 +96,6 @@ function Find-AppleCursor {
     return $null
 }
 
-# Complete Windows system cursor map. The Apple package's Work/Busy states are animated .ani files.
 $CursorMap = [ordered]@{
     Arrow       = @('Pointer','left_ptr')
     Help        = @('Help','question_arrow')
@@ -130,68 +129,37 @@ foreach ($entry in $CursorMap.GetEnumerator()) {
     if ($file) {
         Set-ItemProperty -Path $CursorKey -Name $entry.Key -Value $file
         $Resolved[$entry.Key] = $file
-        Write-StyleLog "Cursor $($entry.Key) -> $file"
         $Applied++
     } else {
         $Resolved[$entry.Key] = ''
-        Write-StyleLog "Cursor state missing: $($entry.Key); candidates=$($entry.Value -join ',')"
     }
 }
 
-# Register a real selectable Windows cursor scheme in the exact system slot order.
 $SchemeOrder = @(
     'Arrow','Help','AppStarting','Wait','Crosshair','IBeam','NWPen','No',
     'SizeNS','SizeWE','SizeNWSE','SizeNESW','SizeAll','UpArrow','Hand','Pin','Person'
 )
-$SchemeValues = foreach ($name in $SchemeOrder) { [string]$Resolved[$name] }
-$SchemeString = $SchemeValues -join ','
+$SchemeString = (($SchemeOrder | ForEach-Object { [string]$Resolved[$_] }) -join ',')
 New-ItemProperty -Path $SchemesKey -Name 'macOS Complete' -Value $SchemeString -PropertyType String -Force | Out-Null
 Set-Item -Path $CursorKey -Value 'macOS Complete'
-
-if ($Applied -gt 0) {
-    [MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
-    Write-StyleLog "macOS Complete cursor scheme applied: $Applied/$($CursorMap.Count) Windows states"
-} else {
-    Write-StyleLog 'No Apple cursor files were found.'
-}
-
-Apply-Wallpaper
-
-Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-Start-Process -FilePath 'explorer.exe'
-Start-Sleep -Seconds 3
-
-# Explorer sometimes reloads defaults in a new RDP shell, so force both again.
-Apply-Wallpaper
 [MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
+Write-StyleLog "macOS Complete cursor scheme applied: $Applied/$($CursorMap.Count) states"
 
-# Start Seelen UI in this same RDP desktop.
-$CandidateRoots = @(
-    'C:\Program Files\Seelen UI',
-    'C:\Program Files\Seelen',
-    (Join-Path $env:LOCALAPPDATA 'Programs\Seelen UI'),
-    (Join-Path $env:LOCALAPPDATA 'Seelen UI')
-)
+Apply-Wallpaper
 
-$SeelenExe = $null
-foreach ($Root in $CandidateRoots) {
-    if (Test-Path $Root) {
-        $SeelenExe = Get-ChildItem -Path $Root -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'seelen' -and $_.Name -notmatch 'setup|uninstall|update' } |
-            Select-Object -First 1
-        if ($SeelenExe) { break }
-    }
-}
-
-if ($SeelenExe) {
-    $ExistingSeelen = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $SeelenExe.FullName }
-    if (-not $ExistingSeelen) {
-        Start-Process -FilePath $SeelenExe.FullName
-        Write-StyleLog "Seelen UI started interactively: $($SeelenExe.FullName)"
-    }
+# IMPORTANT: do not kill/restart Explorer. That was a source of flicker and RDP shell bugs.
+# Launch the lightweight MacBook overlay in its own STA PowerShell process.
+if (Test-Path $ShellScript) {
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile',
+        '-STA',
+        '-ExecutionPolicy','Bypass',
+        '-WindowStyle','Hidden',
+        '-File',"`"$ShellScript`""
+    ) -WindowStyle Hidden
+    Write-StyleLog 'MacBook Lite Shell launch requested.'
 } else {
-    Write-StyleLog 'Seelen UI executable was not found for this profile.'
+    Write-StyleLog "MacBook Lite Shell missing: $ShellScript"
 }
 
-Write-StyleLog 'Interactive macOS-style personalization completed.'
+Write-StyleLog 'Stable MacBook personalization completed without restarting Explorer.'
