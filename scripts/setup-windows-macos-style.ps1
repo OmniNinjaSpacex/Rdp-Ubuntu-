@@ -13,6 +13,7 @@ if ($RdpPassword.Length -lt 12) { throw 'RDP_PASSWORD deve ter pelo menos 12 car
 $MacRoot = 'C:\MacStyle'
 $CursorRoot = Join-Path $MacRoot 'AppleCursor'
 $ApplyScript = Join-Path $MacRoot 'Apply-MacStyle.ps1'
+$ShellScript = Join-Path $MacRoot 'MacBook-Lite-Shell.ps1'
 New-Item -ItemType Directory -Force -Path $MacRoot, $CursorRoot | Out-Null
 
 Write-Host '==> Habilitando RDP nativo do Windows'
@@ -61,62 +62,45 @@ $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
 $Rect = New-Object System.Drawing.Rectangle 0,0,1920,1080
 $Gradient = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
     $Rect,
-    [System.Drawing.Color]::FromArgb(255,35,79,190),
-    [System.Drawing.Color]::FromArgb(255,154,73,210),
-    35
+    [System.Drawing.Color]::FromArgb(255,28,53,128),
+    [System.Drawing.Color]::FromArgb(255,151,76,196),
+    32
 )
 $Graphics.FillRectangle($Gradient, $Rect)
-$Glow1 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(65,255,255,255))
-$Glow2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(45,80,220,255))
-$Graphics.FillEllipse($Glow1, 1050, -180, 1050, 900)
-$Graphics.FillEllipse($Glow2, -300, 480, 1200, 800)
+$Glow1 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(75,255,255,255))
+$Glow2 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(55,65,205,255))
+$Glow3 = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(38,255,130,210))
+$Graphics.FillEllipse($Glow1, 1080, -210, 1000, 850)
+$Graphics.FillEllipse($Glow2, -260, 520, 1120, 760)
+$Graphics.FillEllipse($Glow3, 570, 350, 950, 720)
 $Bitmap.Save($Wallpaper, [System.Drawing.Imaging.ImageFormat]::Bmp)
+$Glow3.Dispose()
 $Glow2.Dispose()
 $Glow1.Dispose()
 $Gradient.Dispose()
 $Graphics.Dispose()
 $Bitmap.Dispose()
 
-Write-Host '==> Copiando personalizacao interativa do usuario'
+Write-Host '==> Copiando MacBook Stable Shell e personalizacao interativa'
 $SourceApplyScript = Join-Path $PSScriptRoot 'apply-windows-macos-style-user.ps1'
+$SourceShellScript = Join-Path $PSScriptRoot 'start-macbook-lite-shell.ps1'
 if (-not (Test-Path $SourceApplyScript)) { throw "Script auxiliar nao encontrado: $SourceApplyScript" }
+if (-not (Test-Path $SourceShellScript)) { throw "MacBook shell nao encontrado: $SourceShellScript" }
 Copy-Item -Path $SourceApplyScript -Destination $ApplyScript -Force
+Copy-Item -Path $SourceShellScript -Destination $ShellScript -Force
 
-Write-Host '==> Instalando Seelen UI (melhor esforco)'
-$SeelenInstalled = $false
-try {
-    $Release = Invoke-RestMethod -Uri 'https://api.github.com/repos/eythaann/Seelen-UI/releases/latest' -Headers @{ 'User-Agent' = 'GitHub-Actions-MacStyle' }
-    $Asset = $Release.assets |
-        Where-Object { $_.name -match '^Seelen\.UI_.*_x64-setup\.exe$' } |
-        Select-Object -First 1
-
-    if (-not $Asset) { throw 'Instalador x64 do Seelen UI nao encontrado.' }
-
-    $SeelenSetup = Join-Path $MacRoot 'SeelenUI-setup.exe'
-    Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $SeelenSetup
-    $SeelenProcess = Start-Process -FilePath $SeelenSetup -ArgumentList @('/S','/ALLUSERS') -Wait -PassThru
-
-    if ($SeelenProcess.ExitCode -eq 0) {
-        $SeelenInstalled = $true
-        Write-Host 'Seelen UI instalado.'
-    } else {
-        Write-Warning "Seelen UI retornou codigo $($SeelenProcess.ExitCode). O Windows/RDP continuara funcionando."
-    }
-} catch {
-    Write-Warning "Seelen UI nao foi instalado automaticamente: $($_.Exception.Message)"
-}
-
-Write-Host '==> Registrando personalizacao DENTRO da sessao grafica RDP'
-# Common Startup executes inside the interactive user's desktop. This is intentional:
-# cursor, wallpaper and dock settings need the actual RDP session, not a background task session.
+Write-Host '==> Registrando personalizacao dentro da sessao grafica RDP'
 $StartupDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
 New-Item -ItemType Directory -Force -Path $StartupDir | Out-Null
 $StartupFile = Join-Path $StartupDir 'MacStyle-Interactive.cmd'
 $StartupLine = '@powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ApplyScript
 Set-Content -Path $StartupFile -Value $StartupLine -Encoding ASCII
 
-# Remove the old background scheduled task if this image happens to contain it.
+# Remove old task and any old Seelen autostart leftovers from previous versions.
 Unregister-ScheduledTask -TaskName 'MacStyle-CloudPC' -Confirm:$false -ErrorAction SilentlyContinue
+Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessName -match 'seelen' } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
 
 Write-Host '==> Instalando Tailscale'
 $TailscaleMsi = Join-Path $MacRoot 'tailscale.msi'
@@ -143,9 +127,10 @@ try {
 $ConnectionInfo = @(
     "TAILSCALE_IP=$TsIp",
     "RDP_USER=$RdpUser",
-    "SEELEN_INSTALLED=$SeelenInstalled",
     "CURSOR_FILES=$($CursorFiles.Count)",
-    'CURSOR_THEME=macOS Complete'
+    'CURSOR_THEME=macOS Complete',
+    'MAC_SHELL=MacBook Stable Lite',
+    'SEELEN_INSTALLED=False'
 )
 Set-Content -Path (Join-Path $MacRoot 'connection.env') -Value $ConnectionInfo -Encoding ASCII
 
@@ -155,5 +140,5 @@ Get-LocalUser -Name $RdpUser | Select-Object Name,Enabled,PasswordExpires | Form
 Write-Host "Tailscale IP: $TsIp"
 Write-Host "Usuario RDP: $RdpUser"
 Write-Host "Arquivos Apple Cursor: $($CursorFiles.Count)"
-Write-Host "Seelen UI instalado: $SeelenInstalled"
+Write-Host 'MacBook Stable Lite shell preparado.'
 Write-Host 'Windows macOS-style dev/test pronto.'
