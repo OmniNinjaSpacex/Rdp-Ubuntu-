@@ -39,7 +39,7 @@ COMMON_PACKAGES=(
   nemo gnome-terminal
   flatpak gnome-software gnome-software-plugin-flatpak
   policykit-1-gnome
-  ca-certificates curl wget iptables
+  ca-certificates curl wget iptables xz-utils
   mesa-utils mesa-utils-extra
 )
 
@@ -91,6 +91,28 @@ fi
 
 echo "==> Navegador: $BROWSER_BIN"
 
+echo "==> Instalando cursor estilo macOS"
+CURSOR_TMP="$(mktemp -d)"
+trap 'rm -rf "$CURSOR_TMP"' EXIT
+CURSOR_ARCHIVE="$CURSOR_TMP/macOS.tar.xz"
+curl -fL --retry 3 --retry-delay 2 \
+  "https://github.com/ful1e5/apple_cursor/releases/download/v2.0.1/macOS.tar.xz" \
+  -o "$CURSOR_ARCHIVE"
+CURSOR_THEME="$(tar -tJf "$CURSOR_ARCHIVE" | sed -n '1{s#/.*##;p}')"
+[[ -n "$CURSOR_THEME" ]] || CURSOR_THEME="macOS"
+sudo tar -xJf "$CURSOR_ARCHIVE" -C /usr/share/icons
+if [[ ! -d "/usr/share/icons/$CURSOR_THEME" ]]; then
+  if [[ -d /usr/share/icons/macOS ]]; then
+    CURSOR_THEME="macOS"
+  else
+    echo "ERRO: tema de cursor macOS não foi extraído corretamente." >&2
+    exit 1
+  fi
+fi
+sudo install -d /usr/share/icons/default
+printf '[Icon Theme]\nInherits=%s\n' "$CURSOR_THEME" | sudo tee /usr/share/icons/default/index.theme >/dev/null
+echo "==> Cursor instalado: $CURSOR_THEME"
+
 echo "==> Criando usuário RDP: $RDP_USER"
 if ! id "$RDP_USER" >/dev/null 2>&1; then
   sudo useradd --create-home --shell /bin/bash "$RDP_USER"
@@ -126,6 +148,8 @@ export XDG_CURRENT_DESKTOP="X-Cinnamon"
 export XDG_SESSION_DESKTOP="cinnamon"
 export DESKTOP_SESSION="cinnamon"
 export LIBGL_ALWAYS_SOFTWARE=1
+export XCURSOR_THEME="$CURSOR_THEME"
+export XCURSOR_SIZE=32
 unset DBUS_SESSION_BUS_ADDRESS
 unset SESSION_MANAGER
 
@@ -148,7 +172,18 @@ export XDG_CURRENT_DESKTOP="X-Cinnamon"
 export XDG_SESSION_DESKTOP="cinnamon"
 export DESKTOP_SESSION="cinnamon"
 export LIBGL_ALWAYS_SOFTWARE=1
+export XCURSOR_THEME="$CURSOR_THEME"
+export XCURSOR_SIZE=32
 EOF_XSESSIONRC
+
+cat <<EOF_CURSOR | sudo tee "$HOME_DIR/.config/autostart/macos-cursor.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=macOS Cursor Theme
+Exec=sh -c "gsettings set org.cinnamon.desktop.interface cursor-theme '$CURSOR_THEME' 2>/dev/null || true; gsettings set org.cinnamon.desktop.interface cursor-size 32 2>/dev/null || true; gsettings set org.gnome.desktop.interface cursor-theme '$CURSOR_THEME' 2>/dev/null || true; gsettings set org.gnome.desktop.interface cursor-size 32 2>/dev/null || true"
+X-GNOME-Autostart-enabled=true
+Terminal=false
+EOF_CURSOR
 
 cat <<EOF_BROWSER | sudo tee "$HOME_DIR/.local/share/applications/browser-cloudpc.desktop" >/dev/null
 [Desktop Entry]
@@ -222,6 +257,7 @@ TAILSCALE_IP=$TS_IP
 RDP_USER=$RDP_USER
 DESKTOP=Cinnamon
 BROWSER_BIN=$BROWSER_BIN
+CURSOR_THEME=$CURSOR_THEME
 EOF_INFO
 
 echo "==> Verificações finais"
@@ -232,5 +268,5 @@ sudo systemctl --no-pager --full status xrdp | head -n 25 || true
 free -h || true
 df -h /
 
-echo "Linux Mint/Cinnamon dev desktop pronto em $TS_IP; usuário $RDP_USER."
+echo "Linux Mint/Cinnamon dev desktop pronto em $TS_IP; usuário $RDP_USER; cursor $CURSOR_THEME."
 unset TAILSCALE_AUTHKEY RDP_PASSWORD
