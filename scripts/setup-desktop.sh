@@ -24,6 +24,9 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
+echo "==> Sistema"
+cat /etc/os-release | grep -E '^(NAME|VERSION)=' || true
+
 echo "==> Espaço em disco antes da instalação"
 df -h /
 
@@ -51,6 +54,8 @@ if [[ -z "$CHROMIUM_BIN" ]]; then
   exit 1
 fi
 
+echo "==> Navegador encontrado: $CHROMIUM_BIN"
+
 echo "==> Criando usuário RDP: ${RDP_USER}"
 if ! id "$RDP_USER" >/dev/null 2>&1; then
   sudo useradd --create-home --shell /bin/bash "$RDP_USER"
@@ -64,10 +69,14 @@ RDP_GROUP="$(id -gn "$RDP_USER")"
 
 sudo install -d -m 0755 -o "$RDP_USER" -g "$RDP_GROUP" \
   "$HOME_DIR/.config/autostart" \
+  "$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel-xml" \
   "$HOME_DIR/.local/share/applications" \
+  "$HOME_DIR/.local/share" \
+  "$HOME_DIR/.cache" \
   "$HOME_DIR/.icons"
 
-printf '%s\n' 'exec xfce4-session' | sudo tee "$HOME_DIR/.xsession" >/dev/null
+# A sessão XRDP usa Xorg + Xfce.
+printf '%s\n' 'exec startxfce4' | sudo tee "$HOME_DIR/.xsession" >/dev/null
 sudo chown "$RDP_USER:$RDP_GROUP" "$HOME_DIR/.xsession"
 sudo chmod 0644 "$HOME_DIR/.xsession"
 
@@ -86,22 +95,26 @@ if [[ ! -d /usr/share/icons/GoogleDot-Black ]]; then
   exit 1
 fi
 
-sudo -H -u "$RDP_USER" dbus-run-session -- bash <<'XFCONF'
-set -e
+# Em GitHub-hosted runners, executar xfconf-query antes da primeira sessão gráfica
+# pode herdar XDG_CONFIG_HOME/XDG_RUNTIME_DIR do usuário runner. Para evitar isso,
+# gravamos o canal xsettings diretamente no perfil do cloudpc. Na primeira sessão
+# Xfce, xfconfd lê este arquivo normalmente.
+echo "==> Configurando tema ChromeOS-like do Xfce"
+cat <<'EOF_XSETTINGS' | sudo tee "$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" >/dev/null
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="Arc"/>
+    <property name="IconThemeName" type="string" value="Papirus"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="CursorThemeName" type="string" value="GoogleDot-Black"/>
+    <property name="CursorThemeSize" type="int" value="32"/>
+  </property>
+</channel>
+EOF_XSETTINGS
 
-xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Arc \
-  || xfconf-query -c xsettings -p /Net/ThemeName -s Arc
-
-xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Papirus \
-  || xfconf-query -c xsettings -p /Net/IconThemeName -s Papirus
-
-xfconf-query -c xsettings -p /Gtk/CursorThemeName -n -t string -s GoogleDot-Black \
-  || xfconf-query -c xsettings -p /Gtk/CursorThemeName -s GoogleDot-Black
-
-xfconf-query -c xsettings -p /Gtk/CursorThemeSize -n -t int -s 32 \
-  || xfconf-query -c xsettings -p /Gtk/CursorThemeSize -s 32
-XFCONF
-
+# Dock inferior.
 cat <<'EOF_PLANK' | sudo tee "$HOME_DIR/.config/autostart/plank.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
@@ -112,6 +125,7 @@ X-GNOME-Autostart-enabled=true
 Terminal=false
 EOF_PLANK
 
+# Agente gráfico para ações administrativas em aplicativos.
 cat <<'EOF_POLKIT' | sudo tee "$HOME_DIR/.config/autostart/polkit-gnome-authentication-agent-1.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
@@ -122,10 +136,11 @@ X-GNOME-Autostart-enabled=true
 Terminal=false
 EOF_POLKIT
 
+# Atalho de navegador no menu do usuário.
 cat <<EOF_CHROMIUM | sudo tee "$HOME_DIR/.local/share/applications/chromium-cloudpc.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
-Name=Chromium
+Name=Chromium / Chrome
 Exec=$CHROMIUM_BIN --no-first-run %U
 Icon=chromium
 Terminal=false
@@ -135,16 +150,25 @@ EOF_CHROMIUM
 sudo chown -R "$RDP_USER:$RDP_GROUP" \
   "$HOME_DIR/.config" \
   "$HOME_DIR/.local" \
+  "$HOME_DIR/.cache" \
   "$HOME_DIR/.icons"
 
 echo "==> Habilitando Flatpak/Flathub"
-sudo -H -u "$RDP_USER" flatpak remote-add --user --if-not-exists \
+sudo -u "$RDP_USER" env \
+  HOME="$HOME_DIR" \
+  USER="$RDP_USER" \
+  LOGNAME="$RDP_USER" \
+  XDG_CONFIG_HOME="$HOME_DIR/.config" \
+  XDG_DATA_HOME="$HOME_DIR/.local/share" \
+  XDG_CACHE_HOME="$HOME_DIR/.cache" \
+  flatpak remote-add --user --if-not-exists \
   flathub https://flathub.org/repo/flathub.flatpakrepo
 
 echo "==> Iniciando XRDP"
 sudo systemctl enable --now xrdp
 sudo systemctl restart xrdp
 sudo systemctl is-active --quiet xrdp
+sudo ss -ltn | grep ':3389' || true
 
 echo "==> Instalando e conectando Tailscale"
 if ! command -v tailscale >/dev/null 2>&1; then
@@ -176,6 +200,7 @@ fi
 
 sudo ss -ltn | grep -q ':3389' || {
   echo "ERRO: XRDP não está escutando em TCP/3389." >&2
+  sudo systemctl status xrdp --no-pager || true
   exit 1
 }
 
@@ -185,9 +210,8 @@ RDP_USER=$RDP_USER
 TAILSCALE_HOSTNAME=$TS_HOSTNAME
 EOF_INFO
 
-echo "==> Limpando cache APT para preservar o SSD temporário"
+echo "==> Limpando cache APT"
 sudo apt-get clean
-sudo rm -rf /var/lib/apt/lists/*
 
 echo "==> Espaço em disco após a instalação"
 df -h /
