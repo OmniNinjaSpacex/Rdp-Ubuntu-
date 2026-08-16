@@ -1,0 +1,48 @@
+name: macOS Self-Hosted - Tailscale Screen Sharing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-mac:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify macOS, Tailscale and Screen Sharing
+        shell: bash
+        run: bash scripts/macos-selfhosted-status.sh
+
+      - name: Show connection information
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /tmp/macos-remote-info
+
+          echo "macOS: $MACOS_VERSION"
+          echo "Architecture: $MACOS_ARCH"
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "VNC port: $VNC_PORT"
+
+          {
+            echo "## 🍎 Mac self-hosted pronto"
+            echo
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| macOS | \`$MACOS_VERSION\` |"
+            echo "| Arquitetura | \`$MACOS_ARCH\` |"
+            echo "| IP Tailscale | \`$TAILSCALE_IP\` |"
+            echo "| Porta Screen Sharing / VNC | \`$VNC_PORT\` |"
+            echo
+            echo "No celular: conecte o Tailscale à mesma tailnet e, em um cliente VNC, use \`$TAILSCALE_IP:5900\`."
+            echo
+            echo "> A senha é a senha VNC configurada em Ajustes do Sistema > Geral > Compartilhamento > Compartilhamento de Tela. Não use a senha da sua conta do Mac como senha VNC."
+            echo
+            echo "> O Mac precisa permanecer ligado. A tela remota existe no próprio Mac e não depende de manter este workflow rodando."
+          } >> "$GITHUB_STEP_SUMMARY"
