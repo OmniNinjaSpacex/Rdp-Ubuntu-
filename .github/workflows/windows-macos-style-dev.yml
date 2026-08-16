@@ -28,6 +28,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $files = @(
+            'scripts/setup-windows-macos-style.ps1',
+            'scripts/apply-windows-macos-style-user.ps1'
+          )
+
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+
+            if ($errors.Count -gt 0) {
+              Write-Host "Syntax errors in $file"
+              $errors | ForEach-Object { Write-Host $_.Message }
+              exit 1
+            }
+
+            Write-Host "Syntax OK: $file"
+          }
+
       - name: Validate required secrets
         shell: pwsh
         env:
