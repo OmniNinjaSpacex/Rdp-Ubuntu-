@@ -40,13 +40,18 @@ foreach ($Group in @('Administrators', 'Remote Desktop Users')) {
     }
 }
 
-Write-Host '==> Baixando Apple Cursor para Windows'
+Write-Host '==> Baixando pacote Apple Cursor completo para Windows'
 $CursorZip = Join-Path $MacRoot 'macOS-Windows.zip'
 Invoke-WebRequest -Uri 'https://github.com/ful1e5/apple_cursor/releases/download/v2.0.1/macOS-Windows.zip' -OutFile $CursorZip
 Expand-Archive -Path $CursorZip -DestinationPath $CursorRoot -Force
 $CursorInf = Get-ChildItem -Path $CursorRoot -Filter 'install.inf' -Recurse | Select-Object -First 1
 if (-not $CursorInf) { throw 'install.inf do Apple Cursor nao encontrado.' }
-Write-Host "Apple Cursor preparado em $CursorRoot"
+
+$CursorFiles = Get-ChildItem -Path $CursorRoot -Recurse -File | Where-Object { $_.Extension -in @('.cur','.ani') }
+if ($CursorFiles.Count -lt 10) {
+    throw "Pacote Apple Cursor parece incompleto: somente $($CursorFiles.Count) arquivos .cur/.ani encontrados."
+}
+Write-Host "Apple Cursor completo preparado: $($CursorFiles.Count) arquivos de cursor."
 
 Write-Host '==> Gerando wallpaper abstrato inspirado em macOS'
 Add-Type -AssemblyName System.Drawing
@@ -72,7 +77,7 @@ $Gradient.Dispose()
 $Graphics.Dispose()
 $Bitmap.Dispose()
 
-Write-Host '==> Copiando personalizacao do usuario'
+Write-Host '==> Copiando personalizacao interativa do usuario'
 $SourceApplyScript = Join-Path $PSScriptRoot 'apply-windows-macos-style-user.ps1'
 if (-not (Test-Path $SourceApplyScript)) { throw "Script auxiliar nao encontrado: $SourceApplyScript" }
 Copy-Item -Path $SourceApplyScript -Destination $ApplyScript -Force
@@ -101,21 +106,17 @@ try {
     Write-Warning "Seelen UI nao foi instalado automaticamente: $($_.Exception.Message)"
 }
 
-Write-Host '==> Registrando personalizacao para o logon do cloudpc'
-$TaskArguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ApplyScript
-$TaskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $TaskArguments
-$TaskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $RdpUser
+Write-Host '==> Registrando personalizacao DENTRO da sessao grafica RDP'
+# Common Startup executes inside the interactive user's desktop. This is intentional:
+# cursor, wallpaper and dock settings need the actual RDP session, not a background task session.
+$StartupDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
+New-Item -ItemType Directory -Force -Path $StartupDir | Out-Null
+$StartupFile = Join-Path $StartupDir 'MacStyle-Interactive.cmd'
+$StartupLine = '@powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ApplyScript
+Set-Content -Path $StartupFile -Value $StartupLine -Encoding ASCII
 
-try {
-    Register-ScheduledTask -TaskName 'MacStyle-CloudPC' -Action $TaskAction -Trigger $TaskTrigger -User $RdpUser -Password $RdpPassword -RunLevel Highest -Force | Out-Null
-} catch {
-    Write-Warning "Falha ao registrar tarefa com credenciais: $($_.Exception.Message)"
-    $StartupDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup'
-    New-Item -ItemType Directory -Force -Path $StartupDir | Out-Null
-    $StartupFile = Join-Path $StartupDir 'MacStyle.cmd'
-    $StartupLine = '@powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ApplyScript
-    Set-Content -Path $StartupFile -Value $StartupLine -Encoding ASCII
-}
+# Remove the old background scheduled task if this image happens to contain it.
+Unregister-ScheduledTask -TaskName 'MacStyle-CloudPC' -Confirm:$false -ErrorAction SilentlyContinue
 
 Write-Host '==> Instalando Tailscale'
 $TailscaleMsi = Join-Path $MacRoot 'tailscale.msi'
@@ -143,7 +144,8 @@ $ConnectionInfo = @(
     "TAILSCALE_IP=$TsIp",
     "RDP_USER=$RdpUser",
     "SEELEN_INSTALLED=$SeelenInstalled",
-    'CURSOR_THEME=Apple Cursor macOS'
+    "CURSOR_FILES=$($CursorFiles.Count)",
+    'CURSOR_THEME=macOS Complete'
 )
 Set-Content -Path (Join-Path $MacRoot 'connection.env') -Value $ConnectionInfo -Encoding ASCII
 
@@ -152,5 +154,6 @@ Get-Service -Name TermService | Format-Table Status,Name -AutoSize
 Get-LocalUser -Name $RdpUser | Select-Object Name,Enabled,PasswordExpires | Format-List
 Write-Host "Tailscale IP: $TsIp"
 Write-Host "Usuario RDP: $RdpUser"
+Write-Host "Arquivos Apple Cursor: $($CursorFiles.Count)"
 Write-Host "Seelen UI instalado: $SeelenInstalled"
 Write-Host 'Windows macOS-style dev/test pronto.'
