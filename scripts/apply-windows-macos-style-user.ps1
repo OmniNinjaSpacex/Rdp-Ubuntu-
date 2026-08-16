@@ -1,12 +1,22 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
+if ($env:USERNAME -ine 'cloudpc') { exit 0 }
+
 $MacRoot = 'C:\MacStyle'
 $CursorRoot = Join-Path $MacRoot 'AppleCursor'
 $Wallpaper = Join-Path $MacRoot 'mac-style-wallpaper.bmp'
+$LogFile = Join-Path $MacRoot 'user-style.log'
 
-Write-Host 'Applying lightweight macOS-style user settings...'
+function Write-StyleLog {
+    param([string]$Message)
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -Path $LogFile -Value "[$stamp] $Message"
+}
 
-# Windows taskbar: centered, cleaner and less cluttered.
+Write-StyleLog "Interactive personalization started for $env:USERNAME / session $env:SESSIONNAME"
+Start-Sleep -Seconds 3
+
+# Keep Windows responsive but restore the visual motion the previous version disabled.
 $Advanced = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 New-Item -Path $Advanced -Force | Out-Null
 Set-ItemProperty -Path $Advanced -Name TaskbarAl -Type DWord -Value 1
@@ -17,67 +27,139 @@ $Search = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
 New-Item -Path $Search -Force | Out-Null
 Set-ItemProperty -Path $Search -Name SearchboxTaskbarMode -Type DWord -Value 0
 
-# Light, translucent look while avoiding expensive shell animations.
 $Personalize = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 New-Item -Path $Personalize -Force | Out-Null
 Set-ItemProperty -Path $Personalize -Name AppsUseLightTheme -Type DWord -Value 1
 Set-ItemProperty -Path $Personalize -Name SystemUsesLightTheme -Type DWord -Value 1
 Set-ItemProperty -Path $Personalize -Name EnableTransparency -Type DWord -Value 1
 
+$VisualEffects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+New-Item -Path $VisualEffects -Force | Out-Null
+Set-ItemProperty -Path $VisualEffects -Name VisualFXSetting -Type DWord -Value 1
+
 $Desktop = 'HKCU:\Control Panel\Desktop'
 New-Item -Path $Desktop -Force | Out-Null
-Set-ItemProperty -Path $Desktop -Name MenuShowDelay -Value '80'
+Set-ItemProperty -Path $Desktop -Name MenuShowDelay -Value '120'
 Set-ItemProperty -Path $Desktop -Name WallpaperStyle -Value '10'
 Set-ItemProperty -Path $Desktop -Name TileWallpaper -Value '0'
-if (Test-Path $Wallpaper) {
-    Set-ItemProperty -Path $Desktop -Name Wallpaper -Value $Wallpaper
-}
 
 $WindowMetrics = 'HKCU:\Control Panel\Desktop\WindowMetrics'
 New-Item -Path $WindowMetrics -Force | Out-Null
-Set-ItemProperty -Path $WindowMetrics -Name MinAnimate -Value '0'
+Set-ItemProperty -Path $WindowMetrics -Name MinAnimate -Value '1'
 
-# Install/register Apple Cursor for this profile and apply the macOS cursor scheme.
-$Inf = Get-ChildItem -Path $CursorRoot -Filter 'install.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($Inf) {
-    Start-Process -FilePath 'rundll32.exe' -ArgumentList @('setupapi.dll,InstallHinfSection','DefaultInstall','132',$Inf.FullName) -Wait -WindowStyle Hidden
-    Start-Sleep -Seconds 1
+if (-not ('MacStyle.NativeMethods' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace MacStyle {
+    public static class NativeMethods {
+        [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+        public static extern bool SystemParametersInfo(int action, int param, string value, int flags);
+
+        [DllImport("user32.dll", SetLastError=true)]
+        public static extern bool SystemParametersInfo(int action, int param, IntPtr value, int flags);
+    }
+}
+'@
 }
 
-$Schemes = 'HKCU:\Control Panel\Cursors\Schemes'
-if (Test-Path $Schemes) {
-    $SchemeProperties = (Get-ItemProperty -Path $Schemes).PSObject.Properties
-    $Scheme = $SchemeProperties | Where-Object { $_.Name -match 'macOS' } | Select-Object -First 1
-
-    if ($Scheme -and $Scheme.Value) {
-        $CursorKey = 'HKCU:\Control Panel\Cursors'
-        New-Item -Path $CursorKey -Force | Out-Null
-        $Parts = [string]$Scheme.Value -split ','
-        $Names = @(
-            'Arrow','Help','AppStarting','Wait','Crosshair','IBeam','NWPen','No',
-            'SizeNS','SizeWE','SizeNWSE','SizeNESW','SizeAll','UpArrow','Hand','Pin','Person'
-        )
-
-        Set-Item -Path $CursorKey -Value $Scheme.Name
-        Set-ItemProperty -Path $CursorKey -Name CursorBaseSize -Value '32'
-
-        for ($i = 0; $i -lt [Math]::Min($Names.Count, $Parts.Count); $i++) {
-            $Value = $Parts[$i].Trim()
-            if (-not [string]::IsNullOrWhiteSpace($Value)) {
-                Set-ItemProperty -Path $CursorKey -Name $Names[$i] -Value $Value
-            }
-        }
+function Apply-Wallpaper {
+    if (Test-Path $Wallpaper) {
+        Set-ItemProperty -Path $Desktop -Name Wallpaper -Value $Wallpaper
+        [MacStyle.NativeMethods]::SystemParametersInfo(20, 0, $Wallpaper, 3) | Out-Null
+        Write-StyleLog "Wallpaper applied: $Wallpaper"
+    } else {
+        Write-StyleLog "Wallpaper missing: $Wallpaper"
     }
 }
 
-# Refresh wallpaper and per-user shell settings.
-Start-Process -FilePath 'rundll32.exe' -ArgumentList 'user32.dll,UpdatePerUserSystemParameters' -WindowStyle Hidden -Wait
+# Apple Cursor package contains Windows cursor states such as Pointer, Link, Text,
+# Work/Busy (animated), Help, resize cursors, Move, Person and Pin.
+$CursorFiles = @()
+if (Test-Path $CursorRoot) {
+    $CursorFiles = Get-ChildItem -Path $CursorRoot -Recurse -File |
+        Where-Object { $_.Extension -in @('.cur', '.ani') }
+}
 
-# Start Seelen UI if it is installed. If not, Windows stays fully usable.
+function Find-AppleCursor {
+    param([string[]]$Candidates)
+
+    foreach ($candidate in $Candidates) {
+        $exact = $CursorFiles | Where-Object { $_.BaseName -ieq $candidate } | Select-Object -First 1
+        if ($exact) { return $exact.FullName }
+    }
+
+    foreach ($candidate in $Candidates) {
+        $partial = $CursorFiles | Where-Object { $_.BaseName -match [regex]::Escape($candidate) } | Select-Object -First 1
+        if ($partial) { return $partial.FullName }
+    }
+
+    return $null
+}
+
+$CursorMap = [ordered]@{
+    Arrow       = @('Pointer','left_ptr')
+    Help        = @('Help','question_arrow')
+    AppStarting = @('Work','left_ptr_watch')
+    Wait        = @('Busy','wait')
+    Crosshair   = @('Cross','crosshair','cross')
+    IBeam       = @('Text','xterm')
+    NWPen       = @('Handwriting','pencil')
+    No          = @('Unavailiable','Unavailable','crossed_circle')
+    SizeNS      = @('Vert','sb_v_double_arrow')
+    SizeWE      = @('Horz','sb_h_double_arrow')
+    SizeNWSE    = @('Dng1','bottom_right_corner')
+    SizeNESW    = @('Dng2','bottom_left_corner')
+    SizeAll     = @('Move','all-scroll')
+    UpArrow     = @('Alternate','right_ptr')
+    Hand        = @('Link','hand2')
+    Pin         = @('Pin','pin')
+    Person      = @('Person','person')
+}
+
+$CursorKey = 'HKCU:\Control Panel\Cursors'
+New-Item -Path $CursorKey -Force | Out-Null
+Set-Item -Path $CursorKey -Value 'macOS CloudPC'
+Set-ItemProperty -Path $CursorKey -Name CursorBaseSize -Type DWord -Value 32
+
+$Applied = 0
+foreach ($entry in $CursorMap.GetEnumerator()) {
+    $file = Find-AppleCursor -Candidates $entry.Value
+    if ($file) {
+        Set-ItemProperty -Path $CursorKey -Name $entry.Key -Value $file
+        Write-StyleLog "Cursor $($entry.Key) -> $file"
+        $Applied++
+    } else {
+        Write-StyleLog "Cursor state not found: $($entry.Key) candidates=$($entry.Value -join ',')"
+    }
+}
+
+if ($Applied -gt 0) {
+    [MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
+    Write-StyleLog "Apple cursor scheme applied directly: $Applied states"
+} else {
+    Write-StyleLog 'No Apple cursor files were found.'
+}
+
+Apply-Wallpaper
+
+# Restart Explorer once so the centered/clean taskbar settings are applied in this RDP desktop.
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Start-Process -FilePath 'explorer.exe'
+Start-Sleep -Seconds 3
+
+# Re-assert wallpaper/cursors after Explorer has rebuilt the desktop.
+Apply-Wallpaper
+[MacStyle.NativeMethods]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
+
+# Start Seelen UI in the same interactive RDP session. Its defaults provide a top toolbar
+# and a bottom MinContent dock with hover zoom (40 -> 70 px), which is closer to macOS.
 $CandidateRoots = @(
     'C:\Program Files\Seelen UI',
     'C:\Program Files\Seelen',
-    (Join-Path $env:LOCALAPPDATA 'Programs\Seelen UI')
+    (Join-Path $env:LOCALAPPDATA 'Programs\Seelen UI'),
+    (Join-Path $env:LOCALAPPDATA 'Seelen UI')
 )
 
 $SeelenExe = $null
@@ -91,12 +173,13 @@ foreach ($Root in $CandidateRoots) {
 }
 
 if ($SeelenExe) {
-    Start-Process -FilePath $SeelenExe.FullName
+    $ExistingSeelen = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $SeelenExe.FullName }
+    if (-not $ExistingSeelen) {
+        Start-Process -FilePath $SeelenExe.FullName
+        Write-StyleLog "Seelen UI started interactively: $($SeelenExe.FullName)"
+    }
+} else {
+    Write-StyleLog 'Seelen UI executable was not found for this profile.'
 }
 
-# Restart Explorer once so the taskbar, wallpaper and cursors are refreshed.
-Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 700
-Start-Process -FilePath 'explorer.exe'
-
-Write-Host 'macOS-style user settings applied.'
+Write-StyleLog 'Interactive macOS-style personalization completed.'
