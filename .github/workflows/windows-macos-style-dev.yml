@@ -33,7 +33,9 @@ jobs:
         run: |
           $files = @(
             'scripts/setup-windows-macos-style.ps1',
-            'scripts/apply-windows-macos-style-user.ps1'
+            'scripts/apply-windows-macos-style-user.ps1',
+            'scripts/setup-safari-like-firefox.ps1',
+            'scripts/apply-safari-like-firefox-user.ps1'
           )
 
           foreach ($file in $files) {
@@ -71,6 +73,10 @@ jobs:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: ./scripts/setup-windows-macos-style.ps1
 
+      - name: Install Safari-like Firefox and Mac-style app layer
+        shell: pwsh
+        run: ./scripts/setup-safari-like-firefox.ps1
+
       - name: Show connection information
         id: connection
         shell: pwsh
@@ -83,6 +89,7 @@ jobs:
           $ip = $data['TAILSCALE_IP']
           $user = $data['RDP_USER']
           $seelen = $data['SEELEN_INSTALLED']
+          $cursorFiles = $data['CURSOR_FILES']
           if (-not $ip) { throw 'Tailscale IP not found.' }
 
           "tailscale_ip=$ip" >> $env:GITHUB_OUTPUT
@@ -91,9 +98,10 @@ jobs:
           Write-Host "Tailscale IP: $ip"
           Write-Host "RDP username: $user"
           Write-Host "Seelen UI installed: $seelen"
+          Write-Host "Apple cursor files: $cursorFiles"
 
           $summary = @"
-          ## 🍎 Windows macOS-style pronto para dev/test
+          ## 🍎 Windows → experiência macOS-like pronta para dev/test
 
           | Campo | Valor |
           |---|---|
@@ -101,13 +109,15 @@ jobs:
           | Usuário | ``$user`` |
           | Senha | valor do secret ``RDP_PASSWORD`` |
           | Protocolo | RDP nativo do Windows |
-          | Cursor | Apple Cursor / macOS |
+          | Cursor | ``macOS Complete`` |
           | Interface | Windows + Seelen UI |
+          | Browser | Firefox com camada Safari-like |
+          | Atalhos | Finder, System Settings, Terminal, Launchpad e Trash |
           | Rede | Tailscale |
 
           No Android: conecte o Tailscale à mesma tailnet → Windows App → + → Conexão do PC → use o IP acima → entre como ``$user`` usando sua ``RDP_PASSWORD``.
 
-          No primeiro login, aguarde alguns segundos para o script aplicar wallpaper, cursores, barra centralizada e iniciar o Seelen UI. Se o Seelen UI não iniciar, o Windows continua utilizável normalmente.
+          No primeiro login, aguarde alguns segundos para o perfil aplicar wallpaper, cursores, dock/barra e preparar o navegador Safari-like. O navegador continua sendo Firefox por baixo; Safari atual não roda no Windows.
 
           > Esta é uma máquina temporária para desenvolvimento/testes. Arquivos e aplicativos instalados nela desaparecem quando o job termina.
           "@
