@@ -66,7 +66,7 @@ jobs:
           Write-Host "RDP username: $user"
           Write-Host "Seelen UI installed: $seelen"
 
-          @"
+          $summary = @"
           ## 🍎 Windows macOS-style pronto para dev/test
 
           | Campo | Valor |
@@ -76,7 +76,7 @@ jobs:
           | Senha | valor do secret ``RDP_PASSWORD`` |
           | Protocolo | RDP nativo do Windows |
           | Cursor | Apple Cursor / macOS |
-          | Interface | Seelen UI + Windows 11 |
+          | Interface | Windows + Seelen UI |
           | Rede | Tailscale |
 
           No Android: conecte o Tailscale à mesma tailnet → Windows App → + → Conexão do PC → use o IP acima → entre como ``$user`` usando sua ``RDP_PASSWORD``.
@@ -84,7 +84,8 @@ jobs:
           No primeiro login, aguarde alguns segundos para o script aplicar wallpaper, cursores, barra centralizada e iniciar o Seelen UI. Se o Seelen UI não iniciar, o Windows continua utilizável normalmente.
 
           > Esta é uma máquina temporária para desenvolvimento/testes. Arquivos e aplicativos instalados nela desaparecem quando o job termina.
-          "@ >> $env:GITHUB_STEP_SUMMARY
+          "@
+          $summary >> $env:GITHUB_STEP_SUMMARY
 
       - name: Keep dev/test desktop available
         shell: pwsh
