@@ -34,6 +34,7 @@ jobs:
           $files = @(
             'scripts/setup-windows-macos-style.ps1',
             'scripts/apply-windows-macos-style-user.ps1',
+            'scripts/start-macbook-lite-shell.ps1',
             'scripts/setup-safari-like-firefox.ps1',
             'scripts/apply-safari-like-firefox-user.ps1'
           )
@@ -66,7 +67,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) { throw 'Missing secret: RDP_PASSWORD' }
           if ($env:RDP_PASSWORD.Length -lt 12) { throw 'RDP_PASSWORD must have at least 12 characters' }
 
-      - name: Provision Windows RDP, macOS-style UI, Apple Cursor and Tailscale
+      - name: Provision Windows RDP, MacBook Stable UI, Apple Cursor and Tailscale
         shell: pwsh
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
@@ -88,8 +89,8 @@ jobs:
 
           $ip = $data['TAILSCALE_IP']
           $user = $data['RDP_USER']
-          $seelen = $data['SEELEN_INSTALLED']
           $cursorFiles = $data['CURSOR_FILES']
+          $macShell = $data['MAC_SHELL']
           if (-not $ip) { throw 'Tailscale IP not found.' }
 
           "tailscale_ip=$ip" >> $env:GITHUB_OUTPUT
@@ -97,11 +98,11 @@ jobs:
 
           Write-Host "Tailscale IP: $ip"
           Write-Host "RDP username: $user"
-          Write-Host "Seelen UI installed: $seelen"
           Write-Host "Apple cursor files: $cursorFiles"
+          Write-Host "Mac shell: $macShell"
 
           $summary = @"
-          ## 🍎 Windows → experiência macOS-like pronta para dev/test
+          ## 🍎 MacBook Stable sobre Windows — pronto para dev/test
 
           | Campo | Valor |
           |---|---|
@@ -110,14 +111,14 @@ jobs:
           | Senha | valor do secret ``RDP_PASSWORD`` |
           | Protocolo | RDP nativo do Windows |
           | Cursor | ``macOS Complete`` |
-          | Interface | Windows + Seelen UI |
+          | Interface | ``MacBook Stable Lite`` |
           | Browser | Firefox com camada Safari-like |
-          | Atalhos | Finder, System Settings, Terminal, Launchpad e Trash |
+          | Dock | Finder, Safari, Launchpad, Settings, Terminal e Trash |
           | Rede | Tailscale |
 
           No Android: conecte o Tailscale à mesma tailnet → Windows App → + → Conexão do PC → use o IP acima → entre como ``$user`` usando sua ``RDP_PASSWORD``.
 
-          No primeiro login, aguarde alguns segundos para o perfil aplicar wallpaper, cursores, dock/barra e preparar o navegador Safari-like. O navegador continua sendo Firefox por baixo; Safari atual não roda no Windows.
+          No primeiro login, aguarde alguns segundos para aplicar wallpaper, cursores, barra superior, Dock e navegador Safari-like. Esta versão não reinicia o Explorer e não usa Seelen UI, para reduzir travamentos e piscadas no RDP.
 
           > Esta é uma máquina temporária para desenvolvimento/testes. Arquivos e aplicativos instalados nela desaparecem quando o job termina.
           "@
