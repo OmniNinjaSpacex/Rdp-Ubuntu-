@@ -25,7 +25,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 
 echo "==> Sistema"
-cat /etc/os-release | grep -E '^(NAME|VERSION)=' || true
+grep -E '^(NAME|VERSION)=' /etc/os-release || true
 
 echo "==> Espaço em disco antes da instalação"
 df -h /
@@ -33,7 +33,7 @@ df -h /
 echo "==> Instalando Xfce, XRDP e aplicativos"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  xfce4 xfce4-goodies xorg dbus-x11 x11-xserver-utils \
+  xfce4 xfce4-goodies xorg dbus-x11 dbus-user-session x11-xserver-utils \
   xrdp xorgxrdp \
   thunar xfce4-terminal mousepad plank \
   papirus-icon-theme arc-theme \
@@ -66,6 +66,7 @@ sudo usermod -aG sudo,ssl-cert "$RDP_USER"
 
 HOME_DIR="$(getent passwd "$RDP_USER" | cut -d: -f6)"
 RDP_GROUP="$(id -gn "$RDP_USER")"
+RUNTIME_DIR="/tmp/xdg-runtime-$RDP_USER"
 
 sudo install -d -m 0755 -o "$RDP_USER" -g "$RDP_GROUP" \
   "$HOME_DIR/.config/autostart" \
@@ -75,10 +76,45 @@ sudo install -d -m 0755 -o "$RDP_USER" -g "$RDP_GROUP" \
   "$HOME_DIR/.cache" \
   "$HOME_DIR/.icons"
 
-# A sessão XRDP usa Xorg + Xfce.
-printf '%s\n' 'exec startxfce4' | sudo tee "$HOME_DIR/.xsession" >/dev/null
+# GitHub-hosted runners já possuem um usuário runner e variáveis XDG próprias.
+# Uma sessão XRDP do cloudpc não deve herdá-las. O launcher abaixo cria um
+# ambiente XDG/DBus limpo e próprio antes de iniciar o xfce4-session.
+sudo install -d -m 0700 -o "$RDP_USER" -g "$RDP_GROUP" "$RUNTIME_DIR"
+
+cat <<EOF_XSESSION | sudo tee "$HOME_DIR/.xsession" >/dev/null
+#!/usr/bin/env bash
+export HOME="$HOME_DIR"
+export USER="$RDP_USER"
+export LOGNAME="$RDP_USER"
+export SHELL=/bin/bash
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_CACHE_HOME="$HOME_DIR/.cache"
+export XDG_CONFIG_DIRS="/etc/xdg"
+export XDG_DATA_DIRS="/usr/local/share:/usr/share"
+export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+unset DBUS_SESSION_BUS_ADDRESS
+unset SESSION_MANAGER
+exec dbus-run-session -- xfce4-session
+EOF_XSESSION
+
 sudo chown "$RDP_USER:$RDP_GROUP" "$HOME_DIR/.xsession"
-sudo chmod 0644 "$HOME_DIR/.xsession"
+sudo chmod 0755 "$HOME_DIR/.xsession"
+
+# Também disponibilizamos as variáveis cedo para o /etc/X11/Xsession.
+cat <<EOF_XSESSIONRC | sudo tee "$HOME_DIR/.xsessionrc" >/dev/null
+export HOME="$HOME_DIR"
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_CACHE_HOME="$HOME_DIR/.cache"
+export XDG_CONFIG_DIRS="/etc/xdg"
+export XDG_DATA_DIRS="/usr/local/share:/usr/share"
+export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+unset DBUS_SESSION_BUS_ADDRESS
+unset SESSION_MANAGER
+EOF_XSESSIONRC
+sudo chown "$RDP_USER:$RDP_GROUP" "$HOME_DIR/.xsessionrc"
+sudo chmod 0644 "$HOME_DIR/.xsessionrc"
 
 echo "==> Instalando cursor GoogleDot-Black"
 CURSOR_TMP="$(mktemp -d)"
@@ -95,10 +131,6 @@ if [[ ! -d /usr/share/icons/GoogleDot-Black ]]; then
   exit 1
 fi
 
-# Em GitHub-hosted runners, executar xfconf-query antes da primeira sessão gráfica
-# pode herdar XDG_CONFIG_HOME/XDG_RUNTIME_DIR do usuário runner. Para evitar isso,
-# gravamos o canal xsettings diretamente no perfil do cloudpc. Na primeira sessão
-# Xfce, xfconfd lê este arquivo normalmente.
 echo "==> Configurando tema ChromeOS-like do Xfce"
 cat <<'EOF_XSETTINGS' | sudo tee "$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" >/dev/null
 <?xml version="1.0" encoding="UTF-8"?>
@@ -114,7 +146,6 @@ cat <<'EOF_XSETTINGS' | sudo tee "$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel
 </channel>
 EOF_XSETTINGS
 
-# Dock inferior.
 cat <<'EOF_PLANK' | sudo tee "$HOME_DIR/.config/autostart/plank.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
@@ -125,7 +156,6 @@ X-GNOME-Autostart-enabled=true
 Terminal=false
 EOF_PLANK
 
-# Agente gráfico para ações administrativas em aplicativos.
 cat <<'EOF_POLKIT' | sudo tee "$HOME_DIR/.config/autostart/polkit-gnome-authentication-agent-1.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
@@ -136,7 +166,6 @@ X-GNOME-Autostart-enabled=true
 Terminal=false
 EOF_POLKIT
 
-# Atalho de navegador no menu do usuário.
 cat <<EOF_CHROMIUM | sudo tee "$HOME_DIR/.local/share/applications/chromium-cloudpc.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
@@ -161,8 +190,23 @@ sudo -u "$RDP_USER" env \
   XDG_CONFIG_HOME="$HOME_DIR/.config" \
   XDG_DATA_HOME="$HOME_DIR/.local/share" \
   XDG_CACHE_HOME="$HOME_DIR/.cache" \
+  XDG_CONFIG_DIRS="/etc/xdg" \
+  XDG_DATA_DIRS="/usr/local/share:/usr/share" \
+  XDG_RUNTIME_DIR="$RUNTIME_DIR" \
   flatpak remote-add --user --if-not-exists \
   flathub https://flathub.org/repo/flathub.flatpakrepo
+
+echo "==> Verificando launcher da sessão Xfce"
+sudo -u "$RDP_USER" env \
+  HOME="$HOME_DIR" \
+  XDG_CONFIG_HOME="$HOME_DIR/.config" \
+  XDG_CONFIG_DIRS="/etc/xdg" \
+  XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+  bash -n "$HOME_DIR/.xsession"
+
+test -x /usr/bin/xfce4-session
+test -x /usr/bin/dbus-run-session
+test -d /etc/xdg
 
 echo "==> Iniciando XRDP"
 sudo systemctl enable --now xrdp
